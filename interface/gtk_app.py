@@ -5,14 +5,24 @@ import random
 import threading
 import subprocess
 import time
+import json
+import shutil
+import platform
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib, Gdk, Pango
+from gi.repository import Gtk, GLib, Gdk
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 
 ROOT_DIR = os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))
+    os.path.dirname(
+        os.path.abspath(__file__)
+    )
 )
 
 if ROOT_DIR not in sys.path:
@@ -21,57 +31,152 @@ if ROOT_DIR not in sys.path:
 from core.brain import JarvisBrain
 
 
-class Orb(Gtk.DrawingArea):
+class CoreView(Gtk.DrawingArea):
 
     def __init__(self):
+
         super().__init__()
 
         self.phase = 0.0
-        self.active = False
+        self.energy = 0.12
+        self.target_energy = 0.12
 
-        self.set_size_request(500, 300)
-        self.connect("draw", self.draw)
+        self.thinking = False
+        self.speaking = False
+
+        self.set_size_request(
+            300,
+            260
+        )
+
+        self.connect(
+            "draw",
+            self.draw
+        )
+
+        rng = random.Random(42)
+
+        self.stars = []
+
+        for _ in range(170):
+
+            self.stars.append(
+                (
+                    rng.uniform(-1.0, 1.0),
+                    rng.uniform(-0.8, 0.8),
+                    rng.uniform(0.25, 1.0),
+                    rng.uniform(0.0, math.pi * 2)
+                )
+            )
 
         self.nodes = []
 
-        random.seed(7)
+        for _ in range(100):
 
-        # Network sphere
-        for _ in range(110):
-            theta = random.uniform(0, math.pi * 2)
-            phi = random.uniform(-math.pi / 2, math.pi / 2)
+            theta = rng.uniform(
+                0,
+                math.pi * 2
+            )
+
+            phi = rng.uniform(
+                -math.pi / 2,
+                math.pi / 2
+            )
 
             self.nodes.append(
                 (
                     theta,
                     phi,
-                    random.uniform(0.7, 1.0),
-                    random.uniform(0.4, 1.0)
+                    rng.uniform(
+                        0.5,
+                        1.0
+                    )
                 )
             )
 
-        GLib.timeout_add(30, self.animate)
+        GLib.timeout_add(
+            33,
+            self.animate
+        )
+
+    def set_state(
+        self,
+        thinking=False,
+        speaking=False
+    ):
+
+        self.thinking = bool(
+            thinking
+        )
+
+        self.speaking = bool(
+            speaking
+        )
+
+        if self.speaking:
+
+            self.target_energy = 0.95
+
+        elif self.thinking:
+
+            self.target_energy = 0.65
+
+        else:
+
+            self.target_energy = 0.12
+
+        self.queue_draw()
 
     def animate(self):
 
-        self.phase += 0.025
+        if self.speaking:
+
+            speed = 0.022
+
+        elif self.thinking:
+
+            speed = 0.016
+
+        else:
+
+            speed = 0.009
+
+        self.phase += speed
+
+        self.energy += (
+            self.target_energy
+            - self.energy
+        ) * 0.065
+
         self.queue_draw()
 
         return True
 
-    def draw(self, widget, cr):
+    def draw(
+        self,
+        widget,
+        cr
+    ):
 
-        width = widget.get_allocated_width()
-        height = widget.get_allocated_height()
+        width = max(
+            1,
+            widget.get_allocated_width()
+        )
+
+        height = max(
+            1,
+            widget.get_allocated_height()
+        )
 
         cx = width / 2
-        cy = height / 2 - 5
+        cy = height * 0.47
 
         # Background
+
         cr.set_source_rgb(
-            0.015,
-            0.035,
-            0.055
+            0.003,
+            0.008,
+            0.015
         )
 
         cr.rectangle(
@@ -83,87 +188,258 @@ class Orb(Gtk.DrawingArea):
 
         cr.fill()
 
-        # Grid floor
-        for r in range(35, 250, 28):
+        # Stars
 
-            alpha = max(
-                0.02,
-                0.12 - r / 3000
+        for sx, sy, depth, seed in self.stars:
+
+            x = (
+                cx
+                + sx
+                * width
+                * (
+                    0.45
+                    + depth * 0.20
+                )
+            )
+
+            y = (
+                cy
+                + sy
+                * height
+                * (
+                    0.65
+                    + depth * 0.20
+                )
+            )
+
+            twinkle = (
+                0.35
+                +
+                0.65
+                *
+                abs(
+                    math.sin(
+                        self.phase
+                        * (
+                            0.5
+                            + depth
+                        )
+                        + seed
+                    )
+                )
+            )
+
+            size = (
+                0.4
+                + depth * 1.4
+            )
+
+            alpha = (
+                0.08
+                +
+                twinkle
+                * depth
+                * 0.45
             )
 
             cr.set_source_rgba(
-                0.0,
-                0.65,
+                0.30,
+                0.75,
                 0.95,
                 alpha
             )
 
             cr.arc(
-                cx,
-                cy + 105,
-                r,
+                x,
+                y,
+                size,
                 0,
                 math.pi * 2
             )
 
-            cr.stroke()
+            cr.fill()
 
-        # Orb
-        radius = 125
+        # Core breathing
 
-        if self.active:
-            radius += math.sin(
-                self.phase * 5
-            ) * 7
+        breath = (
+            1.0
+            +
+            0.025
+            *
+            math.sin(
+                self.phase * 1.7
+            )
+        )
+
+        if self.thinking:
+
+            breath += (
+                0.03
+                *
+                math.sin(
+                    self.phase * 3.5
+                )
+            )
+
+        if self.speaking:
+
+            breath += (
+                0.06
+                *
+                math.sin(
+                    self.phase * 7.0
+                )
+            )
+
+        radius = 82 * breath
 
         # Glow
-        for i in range(7):
 
-            r = radius + i * 12
+        for layer in range(
+            8,
+            0,
+            -1
+        ):
 
-            alpha = 0.045 - i * 0.005
-
-            if alpha <= 0:
-                continue
+            rr = (
+                radius
+                + layer * 12
+            )
 
             cr.set_source_rgba(
-                0.0,
-                0.75,
-                1.0,
-                alpha
+                0.02,
+                0.60,
+                0.85,
+                0.003
+                +
+                self.energy
+                * 0.006
             )
 
             cr.arc(
                 cx,
                 cy,
-                r,
+                rr,
                 0,
                 math.pi * 2
             )
 
             cr.stroke()
 
+        # Energy shells
+
+        for ring in range(5):
+
+            wobble = (
+                6
+                *
+                self.energy
+                *
+                math.sin(
+                    self.phase * 1.6
+                    + ring
+                )
+            )
+
+            rx = (
+                radius
+                +
+                ring * 25
+                +
+                wobble
+            )
+
+            ry = rx * 0.42
+
+            cr.set_source_rgba(
+                0.08,
+                0.72,
+                0.95,
+                0.10
+                +
+                self.energy
+                * 0.06
+            )
+
+            cr.save()
+
+            cr.translate(
+                cx,
+                cy
+            )
+
+            cr.rotate(
+                0.07
+                *
+                math.sin(
+                    self.phase
+                    + ring
+                )
+            )
+
+            cr.scale(
+                1.0,
+                ry / max(
+                    rx,
+                    1
+                )
+            )
+
+            cr.arc(
+                0,
+                0,
+                rx,
+                0,
+                math.pi * 2
+            )
+
+            cr.restore()
+
+            cr.stroke()
+
+        # Network sphere
+
         projected = []
 
-        rotation = self.phase * 0.45
+        rotation = (
+            self.phase
+            * 0.27
+        )
 
-        for theta, phi, scale, brightness in self.nodes:
+        for theta, phi, brightness in self.nodes:
 
-            x = math.cos(phi) * math.cos(
-                theta + rotation
+            x = (
+                math.cos(phi)
+                *
+                math.cos(
+                    theta
+                    + rotation
+                )
             )
 
             y = math.sin(phi)
 
-            z = math.cos(phi) * math.sin(
-                theta + rotation
+            z = (
+                math.cos(phi)
+                *
+                math.sin(
+                    theta
+                    + rotation
+                )
             )
 
-            if z < -0.15:
+            if z < -0.10:
                 continue
 
-            px = cx + x * radius
-            py = cy + y * radius
+            px = (
+                cx
+                + x * radius
+            )
+
+            py = (
+                cy
+                + y * radius
+            )
 
             projected.append(
                 (
@@ -174,30 +450,34 @@ class Orb(Gtk.DrawingArea):
                 )
             )
 
-        # Connections
-        for i, a in enumerate(projected):
+        # Network connections
 
-            for b in projected[i + 1:]:
+        for i, a in enumerate(
+            projected
+        ):
 
-                dx = a[0] - b[0]
-                dy = a[1] - b[1]
+            for b in projected[
+                i + 1:
+            ]:
 
-                distance = math.sqrt(
-                    dx * dx + dy * dy
+                distance = math.hypot(
+                    a[0] - b[0],
+                    a[1] - b[1]
                 )
 
-                if distance < 42:
+                if distance < 36:
 
                     alpha = (
-                        0.10
-                        * max(a[2], 0)
-                        * max(b[2], 0)
+                        0.012
+                        +
+                        self.energy
+                        * 0.07
                     )
 
                     cr.set_source_rgba(
-                        0.1,
-                        0.75,
-                        1.0,
+                        0.18,
+                        0.72,
+                        0.92,
                         alpha
                     )
 
@@ -213,19 +493,23 @@ class Orb(Gtk.DrawingArea):
 
                     cr.stroke()
 
-        # Nodes
+        # Network points
+
         for x, y, z, brightness in projected:
 
-            size = 1.4 + z * 2.4
+            size = (
+                0.8
+                + z * 2.0
+            )
 
             alpha = (
-                0.35
-                + z * 0.65
+                0.15
+                + z * 0.75
             ) * brightness
 
             cr.set_source_rgba(
-                0.35,
-                0.9,
+                0.45,
+                0.88,
                 1.0,
                 alpha
             )
@@ -240,50 +524,105 @@ class Orb(Gtk.DrawingArea):
 
             cr.fill()
 
-        # Core
+        # Core glow
+
         cr.set_source_rgba(
-            0.1,
-            0.75,
+            0.40,
+            0.86,
             1.0,
-            0.8
+            0.18
+            +
+            self.energy
+            * 0.32
         )
 
         cr.arc(
             cx,
             cy,
-            3,
+            19
+            +
+            self.energy * 8,
             0,
             math.pi * 2
         )
 
         cr.fill()
 
-        # Label
         cr.set_source_rgba(
-            0.35,
-            0.9,
+            0.95,
+            0.99,
             1.0,
-            0.9
+            0.95
         )
 
-        cr.select_font_face(
-            "Sans",
+        cr.arc(
+            cx,
+            cy,
+            6
+            +
+            self.energy * 2,
             0,
-            1
+            math.pi * 2
         )
 
-        cr.set_font_size(18)
+        cr.fill()
 
-        text = "J A R V I S"
+        # Speaking pulse bars
 
-        ext = cr.text_extents(text)
+        if (
+            self.speaking
+            or
+            self.thinking
+        ):
 
-        cr.move_to(
-            cx - ext.width / 2,
-            cy - radius - 30
-        )
+            for i in range(7):
 
-        cr.show_text(text)
+                amp = (
+                    3
+                    +
+                    self.energy
+                    * (
+                        7
+                        + i
+                    )
+                    *
+                    abs(
+                        math.sin(
+                            self.phase
+                            * 4
+                            + i
+                        )
+                    )
+                )
+
+                x = (
+                    cx
+                    - 45
+                    +
+                    i * 15
+                )
+
+                cr.set_source_rgba(
+                    0.25,
+                    0.82,
+                    1.0,
+                    0.40
+                    +
+                    self.energy
+                    * 0.35
+                )
+
+                cr.rectangle(
+                    x,
+                    cy
+                    + radius
+                    + 15
+                    - amp,
+                    8,
+                    amp
+                )
+
+                cr.fill()
 
         return False
 
@@ -293,30 +632,48 @@ class JarvisApp(Gtk.Window):
     def __init__(self):
 
         super().__init__(
-            title="JARVIS CORE"
+            title="JARVIS"
         )
 
         self.set_default_size(
-            1100,
-            700
+            1000,
+            718
         )
 
-        self.set_position(
-            Gtk.WindowPosition.CENTER
+        self.set_resizable(
+            True
         )
 
-        self.set_resizable(True)
 
         self.processing = False
+        self.speaking = False
+        self._chat_count = 0
+
+        self.current_view = "chat"
 
         self.brain = JarvisBrain()
+
+        self.nav_buttons = {}
 
         self.load_css()
         self.build_ui()
 
-    # =========================================================
+        self.refresh_stats()
+
+        self.add_message(
+            "JARVIS",
+            "System online. I am ready.",
+            False
+        )
+
+        GLib.timeout_add(
+            2000,
+            self.update_clock
+        )
+
+    # ======================================================
     # CSS
-    # =========================================================
+    # ======================================================
 
     def load_css(self):
 
@@ -326,174 +683,163 @@ class JarvisApp(Gtk.Window):
         }
 
         window {
-            background: #02070c;
-            color: #d8f7ff;
+            background: #03070d;
+            color: #dcefff;
         }
 
         .sidebar {
-            background: #030b12;
-            border-right: 1px solid #12303e;
+            background: #050b13;
+            border-right: 1px solid #102a39;
         }
 
         .brand {
-            color: #75eaff;
-            font-size: 26px;
+            color: #8eeaff;
+            font-size: 20px;
             font-weight: bold;
-            letter-spacing: 8px;
+            letter-spacing: 6px;
         }
 
-        .small {
-            color: #527483;
-            font-size: 10px;
+        .tagline {
+            color: #55717c;
+            font-size: 9px;
+            letter-spacing: 2px;
+        }
+
+        .section {
+            color: #517280;
+            font-size: 9px;
+            font-weight: bold;
             letter-spacing: 2px;
         }
 
         .nav {
             background: transparent;
-            color: #87a9b5;
+            color: #87a5b3;
             border: none;
-            padding: 13px;
+            padding: 9px 12px;
             border-radius: 8px;
         }
 
         .nav:hover {
-            background: #09202b;
-            color: #72eaff;
+            background: #0a1c26;
+            color: #8feeff;
         }
 
-        .new-chat {
-            background: #061925;
-            color: #62e8ff;
-            border: 1px solid #12627b;
-            border-radius: 9px;
-            padding: 12px;
+        .nav-active {
+            background: #0b2430;
+            color: #8feeff;
+            border: 1px solid #174b5c;
         }
 
-        .conversation {
-            background: #06131d;
-            color: #9bb9c4;
-            border-radius: 8px;
-            padding: 11px;
+        .panel {
+            background: #061019;
+            border: 1px solid #102d3c;
+            border-radius: 12px;
         }
 
-        .conversation:hover {
-            background: #0b2532;
-            color: #7cecff;
-        }
-
-        .section {
-            color: #4c7180;
+        .panel-title {
+            color: #83e9ff;
             font-size: 10px;
             font-weight: bold;
             letter-spacing: 2px;
         }
 
-        .status {
-            background: #06131d;
-            border: 1px solid #102d3a;
-            padding: 12px;
+        .muted {
+            color: #607c88;
+            font-size: 9px;
         }
 
-        .status-name {
-            color: #a9c7d0;
-            font-size: 11px;
-        }
-
-        .status-good {
-            color: #00e5a0;
-            font-size: 10px;
+        .value {
+            color: #dff8ff;
+            font-size: 14px;
             font-weight: bold;
         }
 
-        .status-ready {
-            color: #27cfff;
-            font-size: 10px;
+        .good {
+            color: #54e7b0;
+            font-size: 9px;
             font-weight: bold;
         }
 
-        .topbar {
-            background: #030b12;
-            border-bottom: 1px solid #12303e;
-        }
-
-        .title {
-            color: #64e8ff;
-            font-size: 19px;
-            font-weight: bold;
-            letter-spacing: 3px;
-        }
-
-        .online {
-            color: #00e5a0;
+        .ready {
+            color: #58dfff;
+            font-size: 9px;
             font-weight: bold;
         }
 
-        .chat-area {
-            background: #02070c;
+        .chat-user {
+            background: #092131;
+            border: 1px solid #164b62;
+            border-radius: 11px;
+            padding: 10px;
         }
 
-        .jarvis-bubble {
-            background: #071621;
-            border: 1px solid #123d4e;
-            border-radius: 13px;
-            padding: 14px;
-        }
-
-        .user-bubble {
-            background: #0a2030;
-            border: 1px solid #17516a;
-            border-radius: 13px;
-            padding: 14px;
+        .chat-ai {
+            background: #071720;
+            border: 1px solid #123746;
+            border-radius: 11px;
+            padding: 10px;
         }
 
         .sender {
-            color: #57e5ff;
-            font-size: 10px;
+            color: #61e5ff;
+            font-size: 9px;
             font-weight: bold;
         }
 
         .message {
             color: #d5e9ee;
-            font-size: 13px;
+            font-size: 11px;
         }
 
         entry {
-            background: #06131d;
-            color: #e5faff;
-            border: 1px solid #18526a;
-            border-radius: 12px;
-            padding: 14px;
-            font-size: 13px;
+            background: #07121c;
+            color: #e6faff;
+            border: 1px solid #18536b;
+            border-radius: 10px;
+            padding: 10px;
+            font-size: 11px;
         }
 
         entry:focus {
-            border-color: #42dcff;
+            border-color: #45dcff;
         }
 
-        .send {
-            background: #073042;
-            color: #70eaff;
-            border: 1px solid #1e7691;
-            border-radius: 11px;
-            padding: 13px 20px;
+        .action {
+            background: #08202d;
+            color: #73eaff;
+            border: 1px solid #1a637d;
+            border-radius: 9px;
+            padding: 9px 12px;
         }
 
-        .send:hover {
-            background: #0b4054;
+        .action:hover {
+            background: #0d3141;
         }
 
-        .mic {
-            background: #071a25;
-            color: #6deaff;
-            border: 1px solid #18516a;
-            border-radius: 11px;
-            padding: 13px 17px;
+        .topbar {
+            background: #050b13;
+            border-bottom: 1px solid #102a39;
+        }
+
+        .top-title {
+            color: #d8f5ff;
+            font-size: 13px;
+            font-weight: bold;
+            letter-spacing: 2px;
+        }
+
+        .clock {
+            color: #65818c;
+            font-size: 9px;
         }
         """
 
         provider = Gtk.CssProvider()
 
-        provider.load_from_data(css)
+        provider.load_from_data(
+            css
+        )
 
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(),
@@ -501,9 +847,9 @@ class JarvisApp(Gtk.Window):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
-    # =========================================================
-    # UI
-    # =========================================================
+    # ======================================================
+    # MAIN UI
+    # ======================================================
 
     def build_ui(self):
 
@@ -513,22 +859,30 @@ class JarvisApp(Gtk.Window):
 
         self.add(root)
 
-        self.build_sidebar(root)
-        self.build_main(root)
+        self.build_sidebar(
+            root
+        )
 
-    # =========================================================
+        self.build_main(
+            root
+        )
+
+    # ======================================================
     # SIDEBAR
-    # =========================================================
+    # ======================================================
 
-    def build_sidebar(self, root):
+    def build_sidebar(
+        self,
+        root
+    ):
 
         sidebar = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
-            spacing=8
+            spacing=5
         )
 
         sidebar.set_size_request(
-            275,
+            210,
             -1
         )
 
@@ -555,32 +909,30 @@ class JarvisApp(Gtk.Window):
             brand,
             False,
             False,
-            25
+            18
         )
 
-        subtitle = Gtk.Label(
-            label="PERSONAL AI SYSTEM"
+        tagline = Gtk.Label(
+            label="ADVANCED AI SYSTEM"
         )
 
-        subtitle.get_style_context().add_class(
-            "small"
+        tagline.get_style_context().add_class(
+            "tagline"
         )
 
         sidebar.pack_start(
-            subtitle,
+            tagline,
             False,
             False,
-            0
+            5
         )
 
-
         section = Gtk.Label(
-            label="CONVERSATIONS"
+            label="MODULES"
         )
 
         section.set_xalign(0)
-
-        section.set_margin_start(22)
+        section.set_margin_start(15)
         section.set_margin_top(15)
 
         section.get_style_context().add_class(
@@ -594,84 +946,39 @@ class JarvisApp(Gtk.Window):
             5
         )
 
-        self.add_conversation(
-            sidebar,
-            "◯   New Conversation",
-            "NOW"
-        )
+        for label, name in [
+            ("CHAT", "chat"),
+            ("SYSTEM", "system"),
+            ("MEMORY", "memory"),
+            ("TOOLS", "tools"),
+            ("CYBER ENGINE", "cyber"),
+            ("SETTINGS", "settings")
+        ]:
 
-        self.add_conversation(
-            sidebar,
-            "◯   مشاريع جارفيس",
-            "Yesterday"
-        )
+            button = Gtk.Button(
+                label=label
+            )
 
-        self.add_conversation(
-            sidebar,
-            "◯   تعلم البرمجة",
-            "2 days"
-        )
+            button.get_style_context().add_class(
+                "nav"
+            )
 
-        self.add_conversation(
-            sidebar,
-            "◯   تحليل النظام",
-            "3 days"
-        )
+            button.connect(
+                "clicked",
+                self.switch_view,
+                name
+            )
 
-        sidebar.pack_start(
-            Gtk.Separator(
-                orientation=Gtk.Orientation.HORIZONTAL
-            ),
-            False,
-            False,
-            20
-        )
+            sidebar.pack_start(
+                button,
+                False,
+                False,
+                1
+            )
 
-        status_title = Gtk.Label(
-            label="SYSTEM STATUS"
-        )
-
-        status_title.set_xalign(0)
-        status_title.set_margin_start(22)
-
-        status_title.get_style_context().add_class(
-            "section"
-        )
-
-        sidebar.pack_start(
-            status_title,
-            False,
-            False,
-            5
-        )
-
-        self.add_status(
-            sidebar,
-            "AI ENGINE (GEMINI)",
-            "ONLINE",
-            True
-        )
-
-        self.add_status(
-            sidebar,
-            "LOCAL AI (OLLAMA)",
-            "READY",
-            False
-        )
-
-        self.add_status(
-            sidebar,
-            "MEMORY",
-            "ACTIVE",
-            True
-        )
-
-        self.add_status(
-            sidebar,
-            "VOICE SYSTEM",
-            "READY",
-            False
-        )
+            self.nav_buttons[
+                name
+            ] = button
 
         spacer = Gtk.Box()
 
@@ -682,62 +989,51 @@ class JarvisApp(Gtk.Window):
             0
         )
 
-
-
-    def add_conversation(
-        self,
-        sidebar,
-        name,
-        date
-    ):
-
-        button = Gtk.Button()
-
-        button.get_style_context().add_class(
-            "conversation"
+        status = Gtk.Label(
+            label="SYSTEM"
         )
 
-        box = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL
-        )
-
-        left = Gtk.Label(
-            label=name
-        )
-
-        left.set_xalign(0)
-
-        date_label = Gtk.Label(
-            label=date
-        )
-
-        date_label.set_xalign(1)
-
-        box.pack_start(
-            left,
-            True,
-            True,
+        status.set_xalign(
             0
         )
 
-        box.pack_end(
-            date_label,
-            False,
-            False,
-            0
+        status.set_margin_start(
+            15
         )
 
-        button.add(box)
-
-        button.set_margin_start(20)
-        button.set_margin_end(20)
+        status.get_style_context().add_class(
+            "section"
+        )
 
         sidebar.pack_start(
-            button,
+            status,
             False,
             False,
-            2
+            5
         )
+
+        self.sidebar_ai = self.add_status(
+            sidebar,
+            "GEMINI",
+            "ONLINE",
+            True
+        )
+
+        self.sidebar_memory = self.add_status(
+            sidebar,
+            "MEMORY",
+            "ACTIVE",
+            True
+        )
+
+        self.sidebar_voice = self.add_status(
+            sidebar,
+            "VOICE",
+            "CHECKING",
+            False
+        )
+
+        return sidebar
 
     def add_status(
         self,
@@ -751,43 +1047,49 @@ class JarvisApp(Gtk.Window):
             orientation=Gtk.Orientation.HORIZONTAL
         )
 
-        row.get_style_context().add_class(
-            "status"
+        row.set_margin_start(
+            15
         )
 
-        row.set_margin_start(20)
-        row.set_margin_end(20)
+        row.set_margin_end(
+            15
+        )
 
-        label = Gtk.Label(
+        name_label = Gtk.Label(
             label=name
         )
 
-        label.set_xalign(0)
-
-        label.get_style_context().add_class(
-            "status-name"
+        name_label.set_xalign(
+            0
         )
 
-        value = Gtk.Label(
-            label="● " + state
+        name_label.get_style_context().add_class(
+            "muted"
         )
 
-        value.set_xalign(1)
+        state_label = Gtk.Label(
+            label=state
+        )
 
-        value.get_style_context().add_class(
-            "status-good" if good
-            else "status-ready"
+        state_label.set_xalign(
+            1
+        )
+
+        state_label.get_style_context().add_class(
+            "good"
+            if good
+            else "ready"
         )
 
         row.pack_start(
-            label,
+            name_label,
             True,
             True,
             0
         )
 
         row.pack_end(
-            value,
+            state_label,
             False,
             False,
             0
@@ -797,14 +1099,19 @@ class JarvisApp(Gtk.Window):
             row,
             False,
             False,
-            1
+            5
         )
 
-    # =========================================================
-    # MAIN
-    # =========================================================
+        return state_label
 
-    def build_main(self, root):
+    # ======================================================
+    # MAIN AREA
+    # ======================================================
+
+    def build_main(
+        self,
+        root
+    ):
 
         main = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL
@@ -817,347 +1124,425 @@ class JarvisApp(Gtk.Window):
             0
         )
 
-        topbar = Gtk.Box(
+        # Top bar
+
+        top = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL
         )
 
-        topbar.set_size_request(
-            -1,
-            70
-        )
-
-        topbar.get_style_context().add_class(
+        top.get_style_context().add_class(
             "topbar"
         )
 
+        top.set_size_request(
+            -1,
+            46
+        )
+
         main.pack_start(
-            topbar,
+            top,
             False,
             False,
             0
         )
 
-        title = Gtk.Label(
-            label="JARVIS CORE"
+        self.top_title = Gtk.Label(
+            label="CHAT"
         )
 
-        title.set_margin_start(30)
-
-        title.get_style_context().add_class(
-            "title"
+        self.top_title.get_style_context().add_class(
+            "top-title"
         )
 
-        topbar.pack_start(
-            title,
+        top.pack_start(
+            self.top_title,
             False,
             False,
-            0
+            15
         )
 
-        online = Gtk.Label(
-            label="● ONLINE"
+        self.clock = Gtk.Label(
+            label=""
         )
 
-        online.get_style_context().add_class(
-            "online"
+        self.clock.get_style_context().add_class(
+            "clock"
         )
 
-        topbar.pack_end(
-            online,
+        top.pack_end(
+            self.clock,
             False,
             False,
-            30
+            15
         )
 
-        # CHAT SCROLL
+        self.stack = Gtk.Stack()
 
-        self.scroll = Gtk.ScrolledWindow()
-
-        self.scroll.set_policy(
-            Gtk.PolicyType.NEVER,
-            Gtk.PolicyType.AUTOMATIC
+        self.stack.set_transition_type(
+            Gtk.StackTransitionType.CROSSFADE
         )
 
-        self.scroll.get_style_context().add_class(
-            "chat-area"
+        self.stack.set_transition_duration(
+            120
         )
 
         main.pack_start(
-            self.scroll,
+            self.stack,
             True,
             True,
             0
         )
 
-        self.chat = Gtk.Box(
+        self.chat_view = self.build_chat_view()
+
+        self.system_view = self.build_system_view()
+
+        self.memory_view = self.build_memory_view()
+
+        self.tools_view = self.build_tools_view()
+
+        self.cyber_view = self.build_cyber_view()
+
+        self.settings_view = self.build_settings_view()
+
+        self.stack.add_named(
+            self.chat_view,
+            "chat"
+        )
+
+        self.stack.add_named(
+            self.system_view,
+            "system"
+        )
+
+        self.stack.add_named(
+            self.memory_view,
+            "memory"
+        )
+
+        self.stack.add_named(
+            self.tools_view,
+            "tools"
+        )
+
+        self.stack.add_named(
+            self.cyber_view,
+            "cyber"
+        )
+
+        self.stack.add_named(
+            self.settings_view,
+            "settings"
+        )
+
+        self.stack.set_visible_child_name(
+            "chat"
+        )
+
+    # ======================================================
+    # CHAT
+    # ======================================================
+
+    def build_chat_view(
+        self
+    ):
+
+        outer = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
-            spacing=12
+            spacing=8
         )
 
-        self.chat.set_margin_start(35)
-        self.chat.set_margin_end(35)
-        self.chat.set_margin_top(20)
-        self.chat.set_margin_bottom(15)
-
-        self.scroll.add(
-            self.chat
-        )
-
-        # ORB
-
-        self.orb = Orb()
-
-        self.orb.set_halign(
-            Gtk.Align.CENTER
-        )
-
-        main.pack_start(
-            self.orb,
-            False,
-            False,
-            0
-        )
-
-        self.add_message(
-            "JARVIS",
-            "مرحباً بك. أنا جارفيس، نظام الذكاء الاصطناعي الخاص بك.",
-            False
-        )
-
-        self.add_message(
-            "JARVIS",
-            "كيف يمكنني مساعدتك اليوم؟",
-            False
-        )
-
-        # INPUT
-
-        input_area = Gtk.Box(
+        body = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL,
             spacing=8
         )
 
-        input_area.set_margin_start(30)
-        input_area.set_margin_end(30)
-        input_area.set_margin_bottom(25)
+        body.set_border_width(
+            8
+        )
 
-        main.pack_start(
-            input_area,
+        outer.pack_start(
+            body,
+            True,
+            True,
+            0
+        )
+
+        # Core
+
+        core_panel = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL
+        )
+
+        core_panel.get_style_context().add_class(
+            "panel"
+        )
+
+        core_panel.set_size_request(
+            390,
+            -1
+        )
+
+        core_title = Gtk.Label(
+            label="JARVIS CORE"
+        )
+
+        core_title.get_style_context().add_class(
+            "panel-title"
+        )
+
+        core_title.set_margin_top(
+            10
+        )
+
+        core_panel.pack_start(
+            core_title,
             False,
             False,
             0
         )
 
-        mic = Gtk.Button(
-            label="🎙"
+        self.orb = CoreView()
+
+        core_panel.pack_start(
+            self.orb,
+            True,
+            True,
+            0
         )
 
-        mic.get_style_context().add_class(
-            "mic"
-        )
-
-        mic.connect(
-            "clicked",
-            self.voice_button
-        )
-
-        input_area.pack_start(
-            mic,
+        body.pack_start(
+            core_panel,
             False,
             False,
             0
+        )
+
+        # Chat
+
+        chat_panel = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=6
+        )
+
+        chat_panel.get_style_context().add_class(
+            "panel"
+        )
+
+        chat_title = Gtk.Label(
+            label="CONVERSATION"
+        )
+
+        chat_title.get_style_context().add_class(
+            "panel-title"
+        )
+
+        chat_title.set_xalign(
+            0
+        )
+
+        chat_title.set_margin_start(
+            12
+        )
+
+        chat_title.set_margin_top(
+            10
+        )
+
+        chat_panel.pack_start(
+            chat_title,
+            False,
+            False,
+            0
+        )
+
+        scroll = Gtk.ScrolledWindow()
+
+        scroll.set_policy(
+            Gtk.PolicyType.AUTOMATIC,
+            Gtk.PolicyType.AUTOMATIC
+        )
+
+        self.chat = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=7
+        )
+
+        scroll.add_with_viewport(
+            self.chat
+        )
+
+        chat_panel.pack_start(
+            scroll,
+            True,
+            True,
+            0
+        )
+
+        body.pack_start(
+            chat_panel,
+            True,
+            True,
+            0
+        )
+
+        # Input
+
+        input_box = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=6
+        )
+
+        input_box.set_margin_start(
+            8
+        )
+
+        input_box.set_margin_end(
+            8
+        )
+
+        input_box.set_margin_bottom(
+            8
         )
 
         self.entry = Gtk.Entry()
 
         self.entry.set_placeholder_text(
-            "اكتب رسالتك هنا..."
-        )
-
-        self.entry.set_direction(
-            Gtk.TextDirection.RTL
+            "Message JARVIS..."
         )
 
         self.entry.connect(
             "activate",
-            self.send
+            self.send_message
         )
 
-        input_area.pack_start(
+        input_box.pack_start(
             self.entry,
             True,
             True,
             0
         )
 
-        send = Gtk.Button(
-            label="➤"
+        self.send_btn = Gtk.Button(
+            label="SEND"
         )
 
-        send.get_style_context().add_class(
-            "send"
+        self.send_btn.get_style_context().add_class(
+            "action"
         )
 
-        send.connect(
+        self.send_btn.connect(
             "clicked",
-            self.send
+            self.send_message
         )
 
-        input_area.pack_start(
-            send,
+        input_box.pack_end(
+            self.send_btn,
             False,
             False,
             0
         )
 
-    # =========================================================
-    # CHAT
-    # =========================================================
+        chat_panel.pack_end(
+            input_box,
+            False,
+            False,
+            0
+        )
+
+        return outer
 
     def add_message(
         self,
         sender,
-        text,
+        message,
         user
     ):
 
-        row = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL
-        )
-
-        row.set_halign(
-            Gtk.Align.END
-            if user
-            else Gtk.Align.START
-        )
-
         bubble = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL
-        )
-
-        bubble.set_size_request(
-            520,
-            -1
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=4
         )
 
         bubble.get_style_context().add_class(
-            "user-bubble"
+            "chat-user"
             if user
-            else "jarvis-bubble"
+            else "chat-ai"
         )
 
-        header = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL
+        bubble.set_margin_start(
+            8
         )
 
-        name = Gtk.Label(
+        bubble.set_margin_end(
+            8
+        )
+
+        sender_label = Gtk.Label(
             label=sender
         )
 
-        name.set_xalign(
-            0 if user else 1
+        sender_label.set_xalign(
+            0
         )
 
-        name.get_style_context().add_class(
+        sender_label.get_style_context().add_class(
             "sender"
         )
 
-        header.pack_start(
-            name,
-            True,
-            True,
+        text = Gtk.Label(
+            label=message
+        )
+
+        text.set_xalign(
             0
         )
 
-        timestamp = Gtk.Label(
-            label=time.strftime("%H:%M")
+        text.set_line_wrap(
+            True
         )
 
-        timestamp.get_style_context().add_class(
-            "small"
+        text.set_selectable(
+            True
         )
 
-        header.pack_end(
-            timestamp,
-            False,
-            False,
-            0
+        text.set_max_width_chars(
+            90
         )
 
-        bubble.pack_start(
-            header,
-            False,
-            False,
-            4
-        )
-
-        message = Gtk.Label(
-            label=str(text)
-        )
-
-        message.set_line_wrap(True)
-        message.set_selectable(True)
-        message.set_max_width_chars(70)
-
-        message.set_justify(
-            Gtk.Justification.RIGHT
-        )
-
-        message.set_direction(
-            Gtk.TextDirection.RTL
-        )
-
-        message.set_xalign(1)
-
-        message.get_style_context().add_class(
+        text.get_style_context().add_class(
             "message"
         )
 
         bubble.pack_start(
-            message,
+            sender_label,
             False,
             False,
             0
         )
 
-        row.pack_start(
-            bubble,
+        bubble.pack_start(
+            text,
             False,
             False,
             0
         )
 
         self.chat.pack_start(
-            row,
+            bubble,
             False,
             False,
-            0
+            2
         )
 
-        self.chat.show_all()
+        bubble.show_all()
 
-        GLib.idle_add(
-            self.scroll_bottom
-        )
+        self._chat_count += 1
 
-    def scroll_bottom(self):
-
-        adjustment = (
-            self.scroll
-            .get_vadjustment()
-        )
-
-        adjustment.set_value(
-            adjustment.get_upper()
-        )
-
-        return False
-
-    # =========================================================
-    # BRAIN
-    # =========================================================
-
-    def send(self, widget):
+    def send_message(
+        self,
+        widget=None
+    ):
 
         if self.processing:
             return
@@ -1167,7 +1552,9 @@ class JarvisApp(Gtk.Window):
         if not text:
             return
 
-        self.entry.set_text("")
+        self.entry.set_text(
+            ""
+        )
 
         self.add_message(
             "YOU",
@@ -1177,9 +1564,16 @@ class JarvisApp(Gtk.Window):
 
         self.processing = True
 
-        self.orb.active = True
+        self.speaking = False
 
-        self.orb.queue_draw()
+        self.orb.set_state(
+            thinking=True,
+            speaking=False
+        )
+
+        self.send_btn.set_sensitive(
+            False
+        )
 
         thread = threading.Thread(
             target=self.ask,
@@ -1189,7 +1583,10 @@ class JarvisApp(Gtk.Window):
 
         thread.start()
 
-    def ask(self, text):
+    def ask(
+        self,
+        text
+    ):
 
         try:
 
@@ -1200,7 +1597,7 @@ class JarvisApp(Gtk.Window):
         except Exception as error:
 
             answer = (
-                "حدث خطأ في JARVIS:\n"
+                "JARVIS ERROR:\n"
                 + str(error)
             )
 
@@ -1209,7 +1606,12 @@ class JarvisApp(Gtk.Window):
             answer
         )
 
-    def receive(self, answer):
+    def receive(
+        self,
+        answer
+    ):
+
+        self._last_answer = answer
 
         self.add_message(
             "JARVIS",
@@ -1218,69 +1620,1004 @@ class JarvisApp(Gtk.Window):
         )
 
         self.processing = False
-        self.orb.active = False
-        self.orb.queue_draw()
+
+        self.send_btn.set_sensitive(
+            True
+        )
+
+        self.orb.set_state(
+            thinking=False,
+            speaking=True
+        )
 
 
         return False
 
-    # =========================================================
+    # ======================================================
     # VOICE
-    # =========================================================
+    # ======================================================
 
-    def voice_button(self, widget):
+    def speak(
+        self,
+        text
+    ):
 
-        # الصوت الحالي للإخراج.
-        # هنضيف speech-to-text بعدين.
-        threading.Thread(
-            target=self.say,
-            args=("أنا أستمع إليك.",),
-            daemon=True
-        ).start()
-
-    def speak(self, text):
-
-        threading.Thread(
+        thread = threading.Thread(
             target=self.say,
             args=(text,),
             daemon=True
-        ).start()
+        )
 
-    def say(self, text):
+        thread.start()
+
+    def say(
+        self,
+        text
+    ):
 
         try:
 
-            subprocess.run(
-                [
-                    "espeak-ng",
-                    "-v",
-                    "ar",
-                    "-s",
-                    "145",
-                    str(text)
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+            if shutil.which(
+                "espeak-ng"
+            ):
+
+                subprocess.run(
+                    [
+                        "espeak-ng",
+                        "-s",
+                        "145",
+                        str(text)
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+
+            elif shutil.which(
+                "espeak"
+            ):
+
+                subprocess.run(
+                    [
+                        "espeak",
+                        "-s",
+                        "145",
+                        str(text)
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+
+        except Exception:
+            pass
+
+        GLib.idle_add(
+            self.voice_finished
+        )
+
+    def voice_finished(
+        self
+    ):
+
+        self.speaking = False
+
+        self.orb.set_state(
+            thinking=False,
+            speaking=False
+        )
+
+        return False
+
+    # ======================================================
+    # SYSTEM
+    # ======================================================
+
+    def build_system_view(
+        self
+    ):
+
+        outer = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=10
+        )
+
+        outer.set_border_width(
+            15
+        )
+
+        title = Gtk.Label(
+            label="SYSTEM TELEMETRY"
+        )
+
+        title.set_xalign(
+            0
+        )
+
+        title.get_style_context().add_class(
+            "panel-title"
+        )
+
+        outer.pack_start(
+            title,
+            False,
+            False,
+            0
+        )
+
+        self.system_grid = Gtk.Grid()
+
+        self.system_grid.set_row_spacing(
+            8
+        )
+
+        self.system_grid.set_column_spacing(
+            8
+        )
+
+        outer.pack_start(
+            self.system_grid,
+            False,
+            False,
+            0
+        )
+
+        self.system_values = {}
+
+        metrics = [
+            ("host", "HOST"),
+            ("os", "OPERATING SYSTEM"),
+            ("python", "PYTHON"),
+            ("cpu", "CPU"),
+            ("ram", "RAM"),
+            ("disk", "DISK"),
+            ("uptime", "UPTIME"),
+            ("kernel", "KERNEL")
+        ]
+
+        for index, (
+            key,
+            label
+        ) in enumerate(
+            metrics
+        ):
+
+            frame = Gtk.Box(
+                orientation=Gtk.Orientation.VERTICAL,
+                spacing=3
+            )
+
+            frame.get_style_context().add_class(
+                "panel"
+            )
+
+            frame.set_border_width(
+                10
+            )
+
+            value = Gtk.Label(
+                label="N/A"
+            )
+
+            value.set_xalign(
+                0
+            )
+
+            value.get_style_context().add_class(
+                "value"
+            )
+
+            caption = Gtk.Label(
+                label=label
+            )
+
+            caption.set_xalign(
+                0
+            )
+
+            caption.get_style_context().add_class(
+                "muted"
+            )
+
+            frame.pack_start(
+                value,
+                False,
+                False,
+                0
+            )
+
+            frame.pack_start(
+                caption,
+                False,
+                False,
+                0
+            )
+
+            self.system_grid.attach(
+                frame,
+                index % 4,
+                index // 4,
+                1,
+                1
+            )
+
+            self.system_values[
+                key
+            ] = value
+
+        return outer
+
+    def refresh_stats(
+        self
+    ):
+
+        if psutil is None:
+
+            return True
+
+        try:
+
+            disk_path = (
+                ROOT_DIR
+                if os.path.exists(
+                    ROOT_DIR
+                )
+                else "/"
+            )
+
+            self.system_values[
+                "host"
+            ].set_text(
+                platform.node()
+                or
+                "N/A"
+            )
+
+            self.system_values[
+                "os"
+            ].set_text(
+                platform.system()
+                +
+                " "
+                +
+                platform.release()
+            )
+
+            self.system_values[
+                "python"
+            ].set_text(
+                platform.python_version()
+            )
+
+            self.system_values[
+                "cpu"
+            ].set_text(
+                str(
+                    round(
+                        psutil.cpu_percent(
+                            interval=None
+                        ),
+                        1
+                    )
+                )
+                + "%"
+            )
+
+            self.system_values[
+                "ram"
+            ].set_text(
+                str(
+                    round(
+                        psutil.virtual_memory().percent,
+                        1
+                    )
+                )
+                + "%"
+            )
+
+            self.system_values[
+                "disk"
+            ].set_text(
+                str(
+                    round(
+                        psutil.disk_usage(
+                            disk_path
+                        ).percent,
+                        1
+                    )
+                )
+                + "%"
+            )
+
+            uptime = int(
+                time.time()
+                -
+                psutil.boot_time()
+            )
+
+            self.system_values[
+                "uptime"
+            ].set_text(
+                self.format_duration(
+                    uptime
+                )
+            )
+
+            self.system_values[
+                "kernel"
+            ].set_text(
+                platform.release()
             )
 
         except Exception:
             pass
 
-    # =========================================================
-    # NEW CHAT
-    # =========================================================
+        return True
 
-    def new_chat(self, widget):
+    def format_duration(
+        self,
+        seconds
+    ):
 
-        for child in self.chat.get_children():
+        days = seconds // 86400
 
-            self.chat.remove(child)
+        hours = (
+            seconds % 86400
+        ) // 3600
 
-        self.add_message(
-            "JARVIS",
-            "تم إنشاء محادثة جديدة. كيف يمكنني مساعدتك؟",
-            False
+        minutes = (
+            seconds % 3600
+        ) // 60
+
+        return (
+            str(days)
+            + "d "
+            + "%02d" % hours
+            + "h "
+            + "%02d" % minutes
+            + "m"
         )
+
+    # ======================================================
+    # MEMORY
+    # ======================================================
+
+    def build_memory_view(
+        self
+    ):
+
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=10
+        )
+
+        box.set_border_width(
+            15
+        )
+
+        title = Gtk.Label(
+            label="LONG-TERM MEMORY"
+        )
+
+        title.set_xalign(
+            0
+        )
+
+        title.get_style_context().add_class(
+            "panel-title"
+        )
+
+        box.pack_start(
+            title,
+            False,
+            False,
+            0
+        )
+
+        self.memory_info = Gtk.Label(
+            label="Loading..."
+        )
+
+        self.memory_info.set_xalign(
+            0
+        )
+
+        self.memory_info.set_selectable(
+            True
+        )
+
+        self.memory_info.get_style_context().add_class(
+            "message"
+        )
+
+        box.pack_start(
+            self.memory_info,
+            False,
+            False,
+            0
+        )
+
+        button = Gtk.Button(
+            label="REFRESH MEMORY"
+        )
+
+        button.get_style_context().add_class(
+            "action"
+        )
+
+        button.connect(
+            "clicked",
+            self.refresh_memory
+        )
+
+        box.pack_start(
+            button,
+            False,
+            False,
+            0
+        )
+
+        self.refresh_memory()
+
+        return box
+
+    def refresh_memory(
+        self,
+        widget=None
+    ):
+
+        path = os.path.join(
+            ROOT_DIR,
+            "data",
+            "memory.json"
+        )
+
+        if not os.path.exists(
+            path
+        ):
+
+            self.memory_info.set_text(
+                "Memory file: N/A\n"
+                "No persistent memory file found."
+            )
+
+            return
+
+        try:
+
+            with open(
+                path,
+                "r",
+                encoding="utf-8"
+            ) as file:
+
+                data = json.load(
+                    file
+                )
+
+            if isinstance(
+                data,
+                dict
+            ):
+
+                conversations = data.get(
+                    "conversations",
+                    []
+                )
+
+            else:
+
+                conversations = []
+
+            self.memory_info.set_text(
+                "Persistent memory: ACTIVE\n"
+                "Records: "
+                +
+                str(
+                    len(
+                        conversations
+                    )
+                )
+                +
+                "\n\n"
+                +
+                path
+            )
+
+        except Exception as error:
+
+            self.memory_info.set_text(
+                "Memory error:\n"
+                + str(error)
+            )
+
+    # ======================================================
+    # TOOLS
+    # ======================================================
+
+    def build_tools_view(
+        self
+    ):
+
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=10
+        )
+
+        box.set_border_width(
+            15
+        )
+
+        title = Gtk.Label(
+            label="LOCAL TOOLS"
+        )
+
+        title.set_xalign(
+            0
+        )
+
+        title.get_style_context().add_class(
+            "panel-title"
+        )
+
+        box.pack_start(
+            title,
+            False,
+            False,
+            0
+        )
+
+        tools = [
+            (
+                "TERMINAL",
+                self.open_terminal
+            ),
+            (
+                "FILE MANAGER",
+                self.open_files
+            ),
+            (
+                "PROJECT FOLDER",
+                self.open_project
+            ),
+            (
+                "BROWSER",
+                self.open_browser
+            )
+        ]
+
+        grid = Gtk.Grid()
+
+        grid.set_row_spacing(
+            8
+        )
+
+        grid.set_column_spacing(
+            8
+        )
+
+        for i, (
+            name,
+            callback
+        ) in enumerate(
+            tools
+        ):
+
+            button = Gtk.Button(
+                label=name
+            )
+
+            button.get_style_context().add_class(
+                "action"
+            )
+
+            button.connect(
+                "clicked",
+                callback
+            )
+
+            grid.attach(
+                button,
+                i % 2,
+                i // 2,
+                1,
+                1
+            )
+
+        box.pack_start(
+            grid,
+            False,
+            False,
+            0
+        )
+
+        return box
+
+    def run_first(
+        self,
+        commands,
+        args=None
+    ):
+
+        args = args or []
+
+        for command in commands:
+
+            if shutil.which(
+                command
+            ):
+
+                subprocess.Popen(
+                    [command]
+                    + args,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+
+                return True
+
+        return False
+
+    def open_terminal(
+        self,
+        widget
+    ):
+
+        self.run_first(
+            [
+                "xfce4-terminal",
+                "gnome-terminal",
+                "konsole"
+            ]
+        )
+
+    def open_files(
+        self,
+        widget
+    ):
+
+        self.run_first(
+            [
+                "thunar",
+                "nautilus",
+                "dolphin"
+            ],
+            [
+                ROOT_DIR
+            ]
+        )
+
+    def open_project(
+        self,
+        widget
+    ):
+
+        if shutil.which(
+            "xdg-open"
+        ):
+
+            subprocess.Popen(
+                [
+                    "xdg-open",
+                    ROOT_DIR
+                ]
+            )
+
+    def open_browser(
+        self,
+        widget
+    ):
+
+        if shutil.which(
+            "xdg-open"
+        ):
+
+            subprocess.Popen(
+                [
+                    "xdg-open",
+                    "https://www.google.com"
+                ]
+            )
+
+    # ======================================================
+    # CYBER
+    # ======================================================
+
+    def build_cyber_view(
+        self
+    ):
+
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=10
+        )
+
+        box.set_border_width(
+            15
+        )
+
+        title = Gtk.Label(
+            label="CYBER ENGINE"
+        )
+
+        title.set_xalign(
+            0
+        )
+
+        title.get_style_context().add_class(
+            "panel-title"
+        )
+
+        box.pack_start(
+            title,
+            False,
+            False,
+            0
+        )
+
+        self.cyber_info = Gtk.Label(
+            label="Loading..."
+        )
+
+        self.cyber_info.set_xalign(
+            0
+        )
+
+        self.cyber_info.set_selectable(
+            True
+        )
+
+        self.cyber_info.get_style_context().add_class(
+            "message"
+        )
+
+        box.pack_start(
+            self.cyber_info,
+            False,
+            False,
+            0
+        )
+
+        refresh = Gtk.Button(
+            label="REFRESH EVIDENCE"
+        )
+
+        refresh.get_style_context().add_class(
+            "action"
+        )
+
+        refresh.connect(
+            "clicked",
+            self.refresh_cyber
+        )
+
+        box.pack_start(
+            refresh,
+            False,
+            False,
+            0
+        )
+
+        self.refresh_cyber()
+
+        return box
+
+    def refresh_cyber(
+        self,
+        widget=None
+    ):
+
+        directory = os.path.join(
+            ROOT_DIR,
+            "cyber",
+            "reports"
+        )
+
+        if not os.path.isdir(
+            directory
+        ):
+
+            self.cyber_info.set_text(
+                "Cyber reports: N/A"
+            )
+
+            return
+
+        files = sorted(
+            os.listdir(
+                directory
+            ),
+            reverse=True
+        )
+
+        scans = [
+            f
+            for f in files
+            if f.startswith(
+                "scan_"
+            )
+        ]
+
+        evidence = [
+            f
+            for f in files
+            if f.startswith(
+                "evidence_"
+            )
+        ]
+
+        latest = (
+            files[0]
+            if files
+            else
+            "None"
+        )
+
+        self.cyber_info.set_text(
+            "Authorized cyber workspace\n\n"
+            "Scan reports: "
+            +
+            str(
+                len(scans)
+            )
+            +
+            "\n"
+            "Evidence files: "
+            +
+            str(
+                len(evidence)
+            )
+            +
+            "\n\n"
+            "Latest file:\n"
+            +
+            latest
+        )
+
+    # ======================================================
+    # SETTINGS
+    # ======================================================
+
+    def build_settings_view(
+        self
+    ):
+
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=10
+        )
+
+        box.set_border_width(
+            15
+        )
+
+        title = Gtk.Label(
+            label="SYSTEM SETTINGS"
+        )
+
+        title.set_xalign(
+            0
+        )
+
+        title.get_style_context().add_class(
+            "panel-title"
+        )
+
+        box.pack_start(
+            title,
+            False,
+            False,
+            0
+        )
+
+        text = (
+            "Interface: GTK 3\n"
+            "AI backend: core.brain.JarvisBrain\n"
+            "Memory: data/memory.json\n"
+            "Cyber reports: cyber/reports\n"
+            "Voice: espeak-ng / espeak\n"
+            "Project: "
+            +
+            ROOT_DIR
+        )
+
+        info = Gtk.Label(
+            label=text
+        )
+
+        info.set_xalign(
+            0
+        )
+
+        info.set_selectable(
+            True
+        )
+
+        info.get_style_context().add_class(
+            "message"
+        )
+
+        box.pack_start(
+            info,
+            False,
+            False,
+            0
+        )
+
+        return box
+
+    # ======================================================
+    # NAVIGATION
+    # ======================================================
+
+    def switch_view(
+        self,
+        widget,
+        name
+    ):
+
+        self.current_view = name
+
+        if name == "chat":
+            view = self.chat_view
+
+        elif name == "system":
+            view = self.system_view
+
+        elif name == "memory":
+            view = self.memory_view
+
+        elif name == "tools":
+            view = self.tools_view
+
+        elif name == "cyber":
+            view = self.cyber_view
+
+        else:
+            view = self.settings_view
+
+        self.stack.set_visible_child(
+            view
+        )
+
+        self.top_title.set_text(
+            name.upper()
+        )
+
+        for key, button in self.nav_buttons.items():
+
+            context = (
+                button
+                .get_style_context()
+            )
+
+            if key == name:
+
+                context.add_class(
+                    "nav-active"
+                )
+
+            else:
+
+                context.remove_class(
+                    "nav-active"
+                )
+
+    # ======================================================
+    # CLOCK
+    # ======================================================
+
+    def update_clock(
+        self
+    ):
+
+        self.clock.set_text(
+            time.strftime(
+                "%Y-%m-%d  %H:%M:%S"
+            )
+        )
+
+        self.refresh_stats()
+
+        return True
 
 
 def main():
@@ -1298,4 +2635,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
