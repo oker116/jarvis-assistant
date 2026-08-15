@@ -1,0 +1,577 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+import json
+import requests
+import sys
+
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+OLLAMA_MODEL = "qwen3:1.7b"
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = "llama-3.1-8b-instant"
+CEREBRAS_API_URL = "https://api.cerebras.ai/v1/chat/completions"
+CEREBRAS_MODEL = "llama-3.1-8b"
+
+
+ROOT_DIR = os.path.dirname(
+    os.path.dirname(
+        os.path.abspath(__file__)
+    )
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(
+        0,
+        ROOT_DIR
+    )
+
+
+from memory.memory import JarvisMemory
+from knowledge.knowledge import KnowledgeEngine
+
+
+class JarvisBrain:
+
+    def __init__(self):
+        self.groq_api_key = os.getenv(
+            "GROQ_API_KEY"
+        )
+
+        self.cerebras_api_key = os.getenv(
+            "CEREBRAS_API_KEY"
+        )
+
+
+        self.api_key = os.environ.get(
+            "GEMINI_API_KEY"
+        )
+
+        if not self.api_key:
+            print("GEMINI_API_KEY missing - local Ollama fallback enabled")
+
+        self.url = (
+            "https://generativelanguage.googleapis.com/"
+            "v1beta/models/gemini-3.5-flash:generateContent"
+        )
+
+        self.memory = JarvisMemory()
+        self.knowledge = KnowledgeEngine()
+
+        self.system_prompt = (
+            "You are JARVIS, a personal AI assistant. "
+            "You are intelligent, precise, analytical and helpful. "
+            "If the user speaks Arabic, answer in Arabic. "
+            "If the user speaks English, answer in English. "
+            "Be natural and conversational. "
+            "Use the conversation memory when it is relevant. "
+            "Do not claim to have performed an action unless "
+            "the system actually performed it."
+        )
+
+    def build_contents(
+        self,
+        user_text
+    ):
+
+        contents = []
+
+        knowledge_context = self.knowledge.context(
+            user_text,
+            limit=5
+        )
+
+        if knowledge_context:
+            contents.append({
+                "role": "user",
+                "parts": [
+                    {
+                        "text":
+                        "JARVIS KNOWLEDGE BASE:\n\n"
+                        + knowledge_context
+                        + "\n\nUse this knowledge when relevant."
+                    }
+                ]
+            })
+
+        contents.append({
+            "role": "user",
+            "parts": [
+                {
+                    "text": self.system_prompt
+                }
+            ]
+        })
+
+        long_term_memory = self.memory.get_context(
+            user_text,
+            limit=10
+        )
+
+        if long_term_memory:
+            contents.append({
+                "role": "user",
+                "parts": [
+                    {
+                        "text":
+                        "JARVIS LONG-TERM MEMORY:\n\n"
+                        + long_term_memory
+                        + "\n\n"
+                        "Use these memories when relevant. "
+                        "Do not invent information that is not present."
+                    }
+                ]
+            })
+
+        recent = self.memory.get_recent(
+            limit=20
+        )
+
+        for item in recent:
+
+            role = item.get(
+                "role"
+            )
+
+            text = item.get(
+                "text",
+                ""
+            )
+
+            if role not in [
+                "user",
+                "model"
+            ]:
+                continue
+
+            if not text:
+                continue
+
+            contents.append({
+                "role": role,
+                "parts": [
+                    {
+                        "text": text
+                    }
+                ]
+            })
+
+        contents.append({
+            "role": "user",
+            "parts": [
+                {
+                    "text": user_text
+                }
+            ]
+        })
+
+        return contents
+
+    def extract_memory(self, user_text):
+        prompt = f"""
+استخرج من رسالة المستخدم المعلومات الشخصية المهمة التي تستحق الذاكرة طويلة المدى.
+لا تحفظ التحيات أو الأسئلة أو الكلام المؤقت.
+إذا لا توجد معلومة مهمة اكتب NO_MEMORY.
+الرسالة:
+{user_text}
+"""
+
+        try:
+            response = requests.post(
+                OLLAMA_URL,
+                json={
+                    "model": OLLAMA_MODEL,
+                    "prompt": prompt,
+                    "stream": False
+                },
+                timeout=15
+            )
+
+            raw = response.json().get("response", "").strip()
+
+            if raw and raw != "NO_MEMORY":
+                self.memory._add_long_term_memory(
+                    raw,
+                    "automatic"
+                )
+                self.memory.save()
+                print("[MEMORY SAVED]", raw)
+
+        except Exception as error:
+            print("[MEMORY SKIPPED]", error)
+
+    def ask_groq(self, user_text, context=""):
+        try:
+            response = requests.post(
+                GROQ_API_URL,
+                headers={
+                    "Authorization": f"Bearer {self.groq_api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": GROQ_MODEL,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                self.system_prompt
+                                + "\n\nJARVIS LONG-TERM MEMORY:\n"
+                                + context
+                            )
+                        },
+                        {
+                            "role": "user",
+                            "content": user_text
+                        }
+                    ],
+                    "temperature": 0.7
+                },
+                timeout=60
+            )
+
+            if response.status_code == 429:
+                print("[JARVIS ROUTER] Groq quota/rate limit")
+                return None
+
+            response.raise_for_status()
+
+            data = response.json()
+            choices = data.get("choices", [])
+
+            if not choices:
+                return None
+
+            answer = choices[0].get(
+                "message", {}
+            ).get("content", "").strip()
+
+            return answer or None
+
+        except Exception as error:
+            print("[GROQ ERROR]", error)
+            return None
+
+    def ask_cerebras(self, user_text, context=""):
+        try:
+            response = requests.post(
+                CEREBRAS_API_URL,
+                headers={
+                    "Authorization": f"Bearer {self.cerebras_api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": CEREBRAS_MODEL,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                self.system_prompt
+                                + "\n\nJARVIS LONG-TERM MEMORY:\n"
+                                + context
+                            )
+                        },
+                        {
+                            "role": "user",
+                            "content": user_text
+                        }
+                    ],
+                    "temperature": 0.7
+                },
+                timeout=60
+            )
+
+            if response.status_code == 429:
+                print("[JARVIS ROUTER] Cerebras quota/rate limit")
+                return None
+
+            response.raise_for_status()
+
+            data = response.json()
+            choices = data.get("choices", [])
+
+            if not choices:
+                return None
+
+            answer = choices[0].get(
+                "message", {}
+            ).get("content", "").strip()
+
+            return answer or None
+
+        except Exception as error:
+            print("[CEREBRAS ERROR]", error)
+            return None
+
+    def ask_ollama(self, user_text, context=""):
+        try:
+            response = requests.post(
+                OLLAMA_URL,
+                json={
+                    "model": OLLAMA_MODEL,
+                                        "prompt": (
+                        self.system_prompt
+                        + "\n\nJARVIS LONG-TERM MEMORY:\n"
+                        + context
+                        + "\n\nUSER:\n"
+                        + user_text
+                    ),
+                    "stream": False
+                },
+                timeout=120
+            )
+
+            response.raise_for_status()
+
+            data = response.json()
+            answer = data.get("response", "").strip()
+
+            if answer:
+                return answer
+
+            return "The local AI returned an empty response."
+
+        except requests.exceptions.Timeout:
+            return "The local AI timed out."
+
+        except requests.exceptions.ConnectionError:
+            return "The local AI is not running."
+
+        except Exception as error:
+            print("OLLAMA ERROR:", error)
+            return "The local AI failed."
+
+    def ask(
+        self,
+        user_text
+    ):
+
+        user_text = user_text.strip()
+
+        if not user_text:
+            return ""
+
+        # Learn important personal information automatically.
+        self.memory.learn_from_text(
+            user_text
+        )
+
+        # Use the local model to detect additional long-term memories.
+        self.extract_memory(
+            user_text
+        )
+
+        # Build context including long-term memory.
+        contents = self.build_contents(
+            user_text
+        )
+
+        long_term_memory = self.memory.get_long_term_context(
+            limit=100
+        )
+
+        # --------------------------------------------------
+        # 1. GEMINI
+        # --------------------------------------------------
+
+        if self.api_key:
+
+            data = {
+                "contents": contents,
+                "generationConfig": {
+                    "temperature": 0.75,
+                    "maxOutputTokens": 2048
+                }
+            }
+
+            try:
+
+                response = requests.post(
+                    self.url,
+                    params={
+                        "key": self.api_key
+                    },
+                    headers={
+                        "Content-Type": "application/json"
+                    },
+                    data=json.dumps(data),
+                    timeout=60
+                )
+
+                if response.status_code == 200:
+
+                    result = response.json()
+
+                    candidates = result.get(
+                        "candidates",
+                        []
+                    )
+
+                    if candidates:
+
+                        answer = (
+                            candidates[0]
+                            .get("content", {})
+                            .get("parts", [{}])[0]
+                            .get("text", "")
+                            .strip()
+                        )
+
+                        if answer:
+
+                            print(
+                                "[JARVIS ROUTER] Provider: Gemini"
+                            )
+
+                            self.memory.add_message(
+                                "user",
+                                user_text
+                            )
+
+                            self.memory.add_message(
+                                "model",
+                                answer
+                            )
+
+                            return answer
+
+                print(
+                    "[JARVIS ROUTER] Gemini failed:",
+                    response.status_code
+                )
+
+            except Exception as error:
+
+                print(
+                    "[JARVIS ROUTER] Gemini error:",
+                    error
+                )
+
+        # --------------------------------------------------
+        # 2. GROQ
+        # --------------------------------------------------
+
+        if self.groq_api_key:
+
+            print(
+                "[JARVIS ROUTER] Switching to Groq"
+            )
+
+            answer = self.ask_groq(
+                user_text,
+                long_term_memory
+            )
+
+            if answer:
+
+                print(
+                    "[JARVIS ROUTER] Provider: Groq"
+                )
+
+                self.memory.add_message(
+                    "user",
+                    user_text
+                )
+
+                self.memory.add_message(
+                    "model",
+                    answer
+                )
+
+                return answer
+
+        # --------------------------------------------------
+        # 3. CEREBRAS
+        # --------------------------------------------------
+
+        if self.cerebras_api_key:
+
+            print(
+                "[JARVIS ROUTER] Switching to Cerebras"
+            )
+
+            answer = self.ask_cerebras(
+                user_text,
+                long_term_memory
+            )
+
+            if answer:
+
+                print(
+                    "[JARVIS ROUTER] Provider: Cerebras"
+                )
+
+                self.memory.add_message(
+                    "user",
+                    user_text
+                )
+
+                self.memory.add_message(
+                    "model",
+                    answer
+                )
+
+                return answer
+
+        # --------------------------------------------------
+        # 4. LOCAL OLLAMA
+        # --------------------------------------------------
+
+        print(
+            "[JARVIS ROUTER] Switching to Ollama"
+        )
+
+        answer = self.ask_ollama(
+            user_text,
+            long_term_memory
+        )
+
+        print(
+            "[JARVIS ROUTER] Provider: Ollama"
+        )
+
+        self.memory.add_message(
+            "user",
+            user_text
+        )
+
+        self.memory.add_message(
+            "model",
+            answer
+        )
+
+        return answer
+
+
+if __name__ == "__main__":
+
+    print("=" * 50)
+    print("JARVIS BRAIN")
+    print("Persistent Memory Enabled")
+    print("=" * 50)
+
+    brain = JarvisBrain()
+
+    while True:
+
+        text = input(
+            "YOU > "
+        ).strip()
+
+        if not text:
+            continue
+
+        if text.lower() in [
+            "exit",
+            "quit"
+        ]:
+            break
+
+        answer = brain.ask(
+            text
+        )
+
+        print("")
+        print(
+            "JARVIS >"
+        )
+        print(answer)
+        print("")

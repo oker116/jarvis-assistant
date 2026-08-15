@@ -1,0 +1,11 @@
+{
+  "success": true,
+  "target": "192.168.1.9",
+  "findings": [
+    "135/tcp   open  msrpc        Microsoft Windows RPC",
+    "139/tcp   open  netbios-ssn  Microsoft Windows netbios-ssn",
+    "445/tcp   open  microsoft-ds Microsoft Windows 7 - 10 microsoft-ds (workgroup: WORKGROUP)",
+    "8080/tcp  open  http-proxy?"
+  ],
+  "report": "D:\\jarvis\\cyber\\reports\\scan_192_168_1_9_20260814_122229.txt"
+}

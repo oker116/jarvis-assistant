@@ -1,0 +1,37 @@
+# -*- coding: cp1256 -*-
+
+class Decision:
+
+    def __init__(self):
+        self.intent = "unknown"
+        self.confidence = 0.0
+        self.reason = ""
+
+    def analyze(self, text):
+
+        text = text.strip().lower()
+
+        self.intent = "conversation"
+        self.confidence = 0.50
+        self.reason = "ÿ·» ⁄«„."
+
+        if "Õ··" in text or " Õ·Ì·" in text:
+            self.intent = "analysis"
+            self.confidence = 0.90
+            self.reason = "«·„” Œœ„ Ìÿ·»  Õ·Ì·«."
+
+        elif " ⁄·„" in text or "«Õ›Ÿ" in text:
+            self.intent = "learning"
+            self.confidence = 0.90
+            self.reason = "«·„” Œœ„ Ì—Ìœ ≈÷«›… „⁄—›…."
+
+        elif "«› Õ" in text or "‘€·" in text:
+            self.intent = "action"
+            self.confidence = 0.85
+            self.reason = "«·„” Œœ„ Ìÿ·»  ‰›Ì– ≈Ã—«¡."
+
+        return {
+            "intent": self.intent,
+            "confidence": self.confidence,
+            "reason": self.reason
+        }
