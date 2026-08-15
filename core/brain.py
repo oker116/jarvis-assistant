@@ -7,6 +7,7 @@ import logging
 import re
 import sys
 import time
+import threading
 import requests
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
@@ -28,6 +29,7 @@ if ROOT_DIR not in sys.path:
 from memory.memory import JarvisMemory
 from knowledge.knowledge import KnowledgeEngine
 from tools.system_control import run_command
+from core.tool_router import ToolRouter
 
 LOG_DIR = os.path.join(ROOT_DIR, "data")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -82,6 +84,7 @@ class JarvisBrain:
 
         self.memory = JarvisMemory()
         self.knowledge = KnowledgeEngine()
+        self.tool_router = ToolRouter(ROOT_DIR)
 
         self.stats = {
             "gemini": {"success": 0, "failure": 0},
@@ -382,7 +385,7 @@ class JarvisBrain:
             return ""
 
         self.memory.learn_from_text(user_text)
-        self.extract_memory(user_text)
+        threading.Thread(target=self.extract_memory, args=(user_text,), daemon=True).start()
 
         contents = self.build_contents(user_text)
         long_term_memory = self.memory.get_long_term_context(limit=100)
@@ -455,6 +458,28 @@ class JarvisBrain:
         self.memory.add_message("user", user_text)
         self.memory.add_message("model", final_answer)
         return final_answer
+
+
+    def suggest_resource(self, topic):
+        """
+        اقتراح سريع وخفيف لمصدر تعلم بخصوص موضوع معين.
+        لا يبني سياق كامل (ذاكرة/معرفة) عشان يكون سريع، يُستخدم
+        من المراقب الخفيف (screen_watch.py) بعد اكتشاف عملية بحث.
+        """
+        prompt = (
+            f"المستخدم بيبحث عن: {topic}\n"
+            "اقترح عليه مصدر تعلم واحد كويس بس (اسم موقع/قناة/كورس معروف) "
+            "في سطر أو سطرين بالعربي، من غير مقدمات."
+        )
+        if self.groq_api_key:
+            answer = self.ask_groq(prompt)
+            if answer:
+                return answer
+        if self.cerebras_api_key:
+            answer = self.ask_cerebras(prompt)
+            if answer:
+                return answer
+        return None
 
 
 if __name__ == "__main__":

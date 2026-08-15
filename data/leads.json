@@ -1,0 +1,75 @@
+[
+  {
+    "id": 1,
+    "created_at": "2026-08-15T13:01:11.852432",
+    "updated_at": "2026-08-15T13:01:11.852448",
+    "business": {
+      "name": "Example Business"
+    },
+    "facebook": {
+      "exists": true,
+      "followers": 15000,
+      "recent_posts": true
+    },
+    "ads": {
+      "running": false,
+      "historical": false
+    },
+    "website": {
+      "success": true,
+      "url": "https://example.com/",
+      "domain": "example.com",
+      "status_code": 200,
+      "title": "Example Domain",
+      "description": "",
+      "headings": [
+        "Example Domain"
+      ],
+      "cta": {
+        "detected": false,
+        "buttons": []
+      },
+      "contact": {
+        "whatsapp": false,
+        "phones": [],
+        "emails": []
+      },
+      "tracking": {
+        "facebook_pixel": false,
+        "google_analytics": false,
+        "google_tag_manager": false,
+        "tiktok_pixel": false,
+        "snap_pixel": false,
+        "linkedin_insight": false,
+        "detected": []
+      },
+      "forms": 0,
+      "images": 0,
+      "commercial_signals": {
+        "has_offer_language": false,
+        "has_pricing": false,
+        "has_contact_intent": false
+      },
+      "analyzer_version": "1.0"
+    },
+    "has_offer": true,
+    "has_whatsapp": true,
+    "analysis": {
+      "score": 32,
+      "priority": "VERY_LOW",
+      "signals": [
+        "Active Facebook presence detected.",
+        "Established Facebook audience.",
+        "Recent Facebook activity detected.",
+        "Commercial offer detected.",
+        "Business WhatsApp contact detected."
+      ],
+      "opportunities": [
+        "No advertising activity was confirmed from supplied data."
+      ],
+      "recommended_service": "Nurture lead / collect more information",
+      "analyzer_version": "1.0"
+    },
+    "status": "new"
+  }
+]
