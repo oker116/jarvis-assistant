@@ -13,3 +13,5 @@ knowledge_base/
 *.log
 llama.cpp/
 *.zip
+llama.cpp/
+*.zip
