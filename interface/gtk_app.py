@@ -1221,7 +1221,6 @@ class JarvisApp(Gtk.Window):
         self.orb.active = False
         self.orb.queue_draw()
 
-        self.speak(answer)
 
         return False
 

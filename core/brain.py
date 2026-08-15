@@ -4,6 +4,7 @@ load_dotenv()
 
 import json
 import logging
+import re
 import sys
 import time
 import requests
@@ -26,6 +27,7 @@ if ROOT_DIR not in sys.path:
 
 from memory.memory import JarvisMemory
 from knowledge.knowledge import KnowledgeEngine
+from tools.system_control import run_command
 
 LOG_DIR = os.path.join(ROOT_DIR, "data")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -46,6 +48,10 @@ if not logger.handlers:
     file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
+
+
+COMMAND_PATTERN = re.compile(r"^RUN_COMMAND:\s*(.+)$", re.MULTILINE)
+MAX_OUTPUT_CHARS = 2000
 
 
 class ProviderError(Exception):
@@ -85,14 +91,32 @@ class JarvisBrain:
         }
 
         self.system_prompt = (
-            "You are JARVIS, a personal AI assistant. "
+            "You are JARVIS, a personal AI assistant running on the "
+            "user's own Kali Linux machine. "
             "You are intelligent, precise, analytical and helpful. "
             "If the user speaks Arabic, answer in Arabic. "
             "If the user speaks English, answer in English. "
             "Be natural and conversational. "
             "Use the conversation memory when it is relevant. "
             "Do not claim to have performed an action unless "
-            "the system actually performed it."
+            "the system actually performed it.\n\n"
+            "TOOL USE - RUNNING SYSTEM COMMANDS:\n"
+            "If, and only if, completing the user's request requires "
+            "running a real terminal command on their machine "
+            "(for example: listing files, checking system info, "
+            "running a network scan tool, checking a process), "
+            "output the command on its own line using EXACTLY this "
+            "format, with nothing else on that line:\n"
+            "RUN_COMMAND: <the exact shell command>\n\n"
+            "Rules:\n"
+            "- Only include ONE RUN_COMMAND line per response.\n"
+            "- Only request a command when it is actually necessary "
+            "to answer the user - do not run commands speculatively.\n"
+            "- The command will be checked against a safety blocklist "
+            "and may be rejected if it is destructive "
+            "(formatting, wiping disks, etc). Never try to bypass this.\n"
+            "- You may write a short explanation before the "
+            "RUN_COMMAND line describing what you are about to do."
         )
 
     def print_stats(self):
@@ -106,6 +130,37 @@ class JarvisBrain:
     def _record(self, provider, ok):
         key = "success" if ok else "failure"
         self.stats[provider][key] += 1
+
+    def _handle_command_directives(self, answer):
+        match = COMMAND_PATTERN.search(answer)
+        if not match:
+            return answer
+
+        command = match.group(1).strip()
+        explanation = answer[:match.start()].strip()
+
+        logger.info("[TOOL] Command requested by model: %s", command)
+        result = run_command(command)
+
+        if result.get("blocked"):
+            summary = (
+                f"⚠️ تم رفض تنفيذ الأمر التالي لأنه يعتبر خطيراً:\n"
+                f"`{command}`\n\n{result.get('output')}"
+            )
+        else:
+            output = (result.get("output") or "").strip()
+            if len(output) > MAX_OUTPUT_CHARS:
+                output = output[:MAX_OUTPUT_CHARS] + "\n... (تم اقتصاص الناتج)"
+            status = "نجح ✅" if result.get("ok") else "فشل ❌"
+            summary = (
+                f"🖥️ تم تنفيذ الأمر:\n`{command}`\n\n"
+                f"الحالة: {status}\n\n"
+                f"الناتج:\n```\n{output if output else '(لا يوجد ناتج)'}\n```"
+            )
+
+        if explanation:
+            return explanation + "\n\n" + summary
+        return summary
 
     def build_contents(self, user_text):
         contents = []
@@ -357,9 +412,10 @@ class JarvisBrain:
                     if answer:
                         logger.info("[ROUTER] Provider: Gemini")
                         self._record("gemini", True)
+                        final_answer = self._handle_command_directives(answer)
                         self.memory.add_message("user", user_text)
-                        self.memory.add_message("model", answer)
-                        return answer
+                        self.memory.add_message("model", final_answer)
+                        return final_answer
                 raise ProviderError("Gemini returned no usable candidates")
 
             except RateLimitError as error:
@@ -377,25 +433,28 @@ class JarvisBrain:
             answer = self.ask_groq(user_text, long_term_memory)
             if answer:
                 logger.info("[ROUTER] Provider: Groq")
+                final_answer = self._handle_command_directives(answer)
                 self.memory.add_message("user", user_text)
-                self.memory.add_message("model", answer)
-                return answer
+                self.memory.add_message("model", final_answer)
+                return final_answer
 
         if self.cerebras_api_key:
             logger.info("[ROUTER] Switching to Cerebras")
             answer = self.ask_cerebras(user_text, long_term_memory)
             if answer:
                 logger.info("[ROUTER] Provider: Cerebras")
+                final_answer = self._handle_command_directives(answer)
                 self.memory.add_message("user", user_text)
-                self.memory.add_message("model", answer)
-                return answer
+                self.memory.add_message("model", final_answer)
+                return final_answer
 
         logger.info("[ROUTER] Switching to Ollama")
         answer = self.ask_ollama(user_text, long_term_memory)
         logger.info("[ROUTER] Provider: Ollama")
+        final_answer = self._handle_command_directives(answer)
         self.memory.add_message("user", user_text)
-        self.memory.add_message("model", answer)
-        return answer
+        self.memory.add_message("model", final_answer)
+        return final_answer
 
 
 if __name__ == "__main__":
