@@ -1,0 +1,349 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+import json
+import requests
+import sys
+
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+OLLAMA_MODEL = "qwen3:1.7b"
+
+
+ROOT_DIR = os.path.dirname(
+    os.path.dirname(
+        os.path.abspath(__file__)
+    )
+)
+
+if ROOT_DIR not in sys.path:
+    sys.path.insert(
+        0,
+        ROOT_DIR
+    )
+
+
+from memory.memory import JarvisMemory
+from knowledge.knowledge import KnowledgeEngine
+
+
+class JarvisBrain:
+
+    def __init__(self):
+
+        self.api_key = os.environ.get(
+            "GEMINI_API_KEY"
+        )
+
+        if not self.api_key:
+            print("GEMINI_API_KEY missing - local Ollama fallback enabled")
+
+        self.url = (
+            "https://generativelanguage.googleapis.com/"
+            "v1beta/models/gemini-3.5-flash:generateContent"
+        )
+
+        self.memory = JarvisMemory()
+        self.knowledge = KnowledgeEngine()
+
+        self.system_prompt = (
+            "You are JARVIS, a personal AI assistant. "
+            "You are intelligent, precise, analytical and helpful. "
+            "If the user speaks Arabic, answer in Arabic. "
+            "If the user speaks English, answer in English. "
+            "Be natural and conversational. "
+            "Use the conversation memory when it is relevant. "
+            "Do not claim to have performed an action unless "
+            "the system actually performed it."
+        )
+
+    def build_contents(
+        self,
+        user_text
+    ):
+
+        contents = []
+
+        knowledge_context = self.knowledge.context(
+            user_text,
+            limit=5
+        )
+
+        if knowledge_context:
+            contents.append({
+                "role": "user",
+                "parts": [
+                    {
+                        "text":
+                        "JARVIS KNOWLEDGE BASE:\n\n"
+                        + knowledge_context
+                        + "\n\nUse this knowledge when relevant."
+                    }
+                ]
+            })
+
+        contents.append({
+            "role": "user",
+            "parts": [
+                {
+                    "text": self.system_prompt
+                }
+            ]
+        })
+
+        recent = self.memory.get_recent(
+            limit=20
+        )
+
+        for item in recent:
+
+            role = item.get(
+                "role"
+            )
+
+            text = item.get(
+                "text",
+                ""
+            )
+
+            if role not in [
+                "user",
+                "model"
+            ]:
+                continue
+
+            if not text:
+                continue
+
+            contents.append({
+                "role": role,
+                "parts": [
+                    {
+                        "text": text
+                    }
+                ]
+            })
+
+        contents.append({
+            "role": "user",
+            "parts": [
+                {
+                    "text": user_text
+                }
+            ]
+        })
+
+        return contents
+
+    def ask_ollama(self, user_text):
+        try:
+            response = requests.post(
+                OLLAMA_URL,
+                json={
+                    "model": OLLAMA_MODEL,
+                    "prompt": user_text,
+                    "stream": False
+                },
+                timeout=120
+            )
+
+            response.raise_for_status()
+
+            data = response.json()
+            answer = data.get("response", "").strip()
+
+            if answer:
+                return answer
+
+            return "The local AI returned an empty response."
+
+        except requests.exceptions.Timeout:
+            return "The local AI timed out."
+
+        except requests.exceptions.ConnectionError:
+            return "The local AI is not running."
+
+        except Exception as error:
+            print("OLLAMA ERROR:", error)
+            return "The local AI failed."
+
+    def ask(
+        self,
+        user_text
+    ):
+
+        user_text = user_text.strip()
+
+        if not user_text:
+            return ""
+
+        contents = self.build_contents(
+            user_text
+        )
+
+        data = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": 0.75,
+                "maxOutputTokens": 2048
+            }
+        }
+
+        headers = {
+            "Content-Type": "application/json"
+        }
+
+        params = {
+            "key": self.api_key
+        }
+
+        try:
+
+            if not self.api_key:
+                return self.ask_ollama(user_text)
+
+            response = requests.post(
+                self.url,
+                params=params,
+                headers=headers,
+                data=json.dumps(data),
+                timeout=60
+            )
+
+            if response.status_code != 200:
+
+                print(
+                    "GEMINI HTTP ERROR:",
+                    response.status_code
+                )
+
+                print(
+                    response.text
+                )
+
+                return (
+                    "I could not connect "
+                    "to the AI engine."
+                )
+
+            result = response.json()
+
+            candidates = result.get(
+                "candidates",
+                []
+            )
+
+            if not candidates:
+
+                print(
+                    "NO CANDIDATES:"
+                )
+
+                print(result)
+
+                return (
+                    "I received an empty "
+                    "AI response."
+                )
+
+            content = (
+                candidates[0]
+                .get(
+                    "content",
+                    {}
+                )
+            )
+
+            parts = content.get(
+                "parts",
+                []
+            )
+
+            if not parts:
+                return (
+                    "I received an empty "
+                    "AI response."
+                )
+
+            answer = parts[0].get(
+                "text",
+                ""
+            )
+
+            if not answer:
+                return (
+                    "I received an empty "
+                    "AI response."
+                )
+
+            self.memory.add_message(
+                "user",
+                user_text
+            )
+
+            self.memory.add_message(
+                "model",
+                answer
+            )
+
+            return answer.strip()
+
+        except requests.exceptions.Timeout:
+
+            return (
+                "The connection timed out."
+            )
+
+        except requests.exceptions.ConnectionError:
+
+            return (
+                "I cannot connect to "
+                "the internet."
+            )
+
+        except Exception as error:
+
+            print(
+                "JARVIS ERROR:",
+                error
+            )
+
+            return (
+                "An unexpected error "
+                "occurred."
+            )
+
+
+if __name__ == "__main__":
+
+    print("=" * 50)
+    print("JARVIS BRAIN")
+    print("Persistent Memory Enabled")
+    print("=" * 50)
+
+    brain = JarvisBrain()
+
+    while True:
+
+        text = input(
+            "YOU > "
+        ).strip()
+
+        if not text:
+            continue
+
+        if text.lower() in [
+            "exit",
+            "quit"
+        ]:
+            break
+
+        answer = brain.ask(
+            text
+        )
+
+        print("")
+        print(
+            "JARVIS >"
+        )
+        print(answer)
+        print("")
