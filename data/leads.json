@@ -71,5 +71,77 @@
       "analyzer_version": "1.0"
     },
     "status": "new"
+  },
+  {
+    "id": 2,
+    "created_at": "2026-08-15T13:31:22.256855",
+    "updated_at": "2026-08-15T13:31:22.256868",
+    "business": {
+      "name": "Test Restaurant"
+    },
+    "facebook": {
+      "exists": true,
+      "recent_posts": true
+    },
+    "ads": {
+      "running": true,
+      "historical": true,
+      "creative_count": 4
+    },
+    "website": {
+      "success": true,
+      "url": "https://example.com/",
+      "domain": "example.com",
+      "status_code": 200,
+      "title": "Example Domain",
+      "description": "",
+      "headings": [
+        "Example Domain"
+      ],
+      "cta": {
+        "detected": false,
+        "buttons": []
+      },
+      "contact": {
+        "whatsapp": false,
+        "phones": [],
+        "emails": []
+      },
+      "tracking": {
+        "facebook_pixel": false,
+        "google_analytics": false,
+        "google_tag_manager": false,
+        "tiktok_pixel": false,
+        "snap_pixel": false,
+        "linkedin_insight": false,
+        "detected": []
+      },
+      "forms": 0,
+      "images": 0,
+      "commercial_signals": {
+        "has_offer_language": false,
+        "has_pricing": false,
+        "has_contact_intent": false
+      },
+      "analyzer_version": "1.0"
+    },
+    "has_offer": false,
+    "has_whatsapp": true,
+    "analysis": {
+      "score": 40,
+      "priority": "LOW",
+      "signals": [
+        "Active Facebook presence detected.",
+        "Recent Facebook activity detected.",
+        "Active paid advertising detected.",
+        "Business WhatsApp contact detected."
+      ],
+      "opportunities": [
+        "Campaign optimization opportunity."
+      ],
+      "recommended_service": "Paid Advertising Audit",
+      "analyzer_version": "1.0"
+    },
+    "status": "new"
   }
 ]

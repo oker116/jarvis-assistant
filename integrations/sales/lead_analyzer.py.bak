@@ -181,55 +181,6 @@ class LeadAnalyzer:
         # SCORE NORMALIZATION
         # --------------------------------------------------
 
-        # -------------------------------------------------
-        # Conversation Learning adjustment
-        # -------------------------------------------------
-        # Learning is used as a bounded signal only.
-        # It must not override the deterministic lead signals.
-        try:
-            from integrations.sales.conversation_learning import (
-                ConversationLearning
-            )
-
-            learning = ConversationLearning()
-            summary = learning.learning_summary()
-
-            won = next(
-                (
-                    x for x in summary
-                    if x.get("key") == "outcome:won"
-                ),
-                None
-            )
-
-            lost = next(
-                (
-                    x for x in summary
-                    if x.get("key") == "outcome:lost"
-                ),
-                None
-            )
-
-            won_count = int((won or {}).get("successes", 0))
-            lost_count = int((lost or {}).get("failures", 0))
-            total = won_count + lost_count
-
-            learning_adjustment = 0
-
-            if total >= 3:
-                win_rate = won_count / total
-
-                if win_rate >= 0.70:
-                    learning_adjustment = 5
-                elif win_rate <= 0.30:
-                    learning_adjustment = -5
-
-            score += learning_adjustment
-
-        except Exception:
-            # Analyzer must continue working even if learning is unavailable.
-            learning_adjustment = 0
-
         score = min(
             max(score, 0),
             100

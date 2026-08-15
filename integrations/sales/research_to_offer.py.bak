@@ -1,0 +1,105 @@
+import json
+import sqlite3
+from pathlib import Path
+
+from integrations.sales.lead_analyzer import LeadAnalyzer
+from integrations.sales.personalized_offer import PersonalizedOfferGenerator
+
+
+class ResearchToOffer:
+    """
+    Research -> Lead Analysis -> Personalized Offer.
+
+    This layer only prepares the first outbound message.
+    It never auto-replies and never sends by itself.
+    """
+
+    def __init__(self, db_path=None):
+        root = Path(__file__).resolve().parents[2]
+
+        self.db_path = Path(
+            db_path or root / "data" / "sales.db"
+        )
+
+        self.analyzer = LeadAnalyzer()
+        self.offer_generator = PersonalizedOfferGenerator()
+
+    def get_lead(self, lead_id):
+        con = sqlite3.connect(str(self.db_path))
+        con.row_factory = sqlite3.Row
+
+        row = con.execute(
+            """
+            SELECT
+                lead_id,
+                name,
+                source,
+                status,
+                score,
+                priority,
+                metadata_json
+            FROM leads
+            WHERE lead_id = ?
+            """,
+            (lead_id,)
+        ).fetchone()
+
+        con.close()
+
+        if not row:
+            return None
+
+        lead = dict(row)
+
+        try:
+            lead["metadata"] = json.loads(
+                lead.get("metadata_json") or "{}"
+            )
+        except Exception:
+            lead["metadata"] = {}
+
+        return lead
+
+    def prepare(self, lead_id):
+        lead = self.get_lead(lead_id)
+
+        if not lead:
+            raise ValueError(
+                f"Lead not found: {lead_id}"
+            )
+
+        # The analyzer receives the actual stored research.
+        analysis = self.analyzer.analyze(lead)
+
+        research = {
+            "findings": analysis.get("signals", [])
+        }
+
+        result = self.offer_generator.generate(
+            lead=lead,
+            analysis=analysis,
+            research=research
+        )
+
+        result["research_used"] = True
+        result["send_allowed"] = bool(
+            result.get("score", 0) >= 60
+            and lead.get("status") not in {"won", "lost"}
+        )
+
+        return result
+
+
+if __name__ == "__main__":
+    engine = ResearchToOffer()
+
+    # Test with the existing lead.
+    lead_id = "2"
+
+    result = engine.prepare(lead_id)
+
+    print(json.dumps(
+        result,
+        indent=2,
+        ensure_ascii=False
+    ))

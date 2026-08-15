@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, render_template_string
+from integrations.whatsapp.webhook import webhook as whatsapp_webhook
 import sys
 import os
 import threading
@@ -11,6 +12,7 @@ if ROOT_DIR not in sys.path:
 from core.brain import JarvisBrain
 
 app = Flask(__name__)
+app.register_blueprint(whatsapp_webhook)
 
 print("[JARVIS] Loading brain...")
 brain = JarvisBrain()

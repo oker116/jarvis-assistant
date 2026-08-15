@@ -1,0 +1,122 @@
+import json
+
+
+class PersonalizedOfferGenerator:
+    """
+    Generates a first-contact sales offer from research data.
+
+    Important:
+    - No automatic conversation.
+    - No invented research findings.
+    - The offer must be based only on supplied evidence.
+    """
+
+    def generate(self, lead, analysis, research=None):
+        research = research or {}
+
+        name = lead.get("name") or "حضرتك"
+        score = float(analysis.get("score") or lead.get("score") or 0)
+
+        signals = analysis.get("signals") or []
+        opportunities = analysis.get("opportunities") or []
+
+        service = (
+            analysis.get("recommended_service")
+            or "Media Buying Audit + Campaign Optimization"
+        )
+
+        evidence = []
+
+        # Only use facts explicitly present in the research/analyzer output.
+        for item in signals:
+            if item and item not in evidence:
+                evidence.append(item)
+
+        pain_points = []
+        for item in opportunities:
+            if item and item not in pain_points:
+                pain_points.append(item)
+
+        # Research-specific facts can be supplied explicitly.
+        explicit_findings = research.get("findings") or []
+
+        for item in explicit_findings:
+            if item and item not in evidence:
+                evidence.append(item)
+
+        if pain_points:
+            problems = "\n".join(
+                f"• {item}" for item in pain_points[:3]
+            )
+        else:
+            problems = "• محتاجين مراجعة سريعة للحملات الحالية."
+
+        if evidence:
+            observed = "\n".join(
+                f"• {item}" for item in evidence[:4]
+            )
+        else:
+            observed = "• عندنا بعض البيانات الأولية عن النشاط التسويقي."
+
+        message = (
+            f"أهلًا {name}،\n\n"
+            "عملت مراجعة أولية للنشاط التسويقي عندكم، "
+            "ولاحظت الآتي:\n\n"
+            f"{observed}\n\n"
+            "وأبرز فرص التحسين اللي شايفها:\n"
+            f"{problems}\n\n"
+            f"بناءً على ده، الخدمة الأنسب مبدئيًا هي: "
+            f"{service}.\n\n"
+            "أقدر أعمل لكم مراجعة مختصرة للحملات الحالية "
+            "وأحدد أهم 3 خطوات ممكن تحسن نتيجة الـMedia Buying.\n\n"
+            "لو مناسب، أبعتلكم التفاصيل."
+        )
+
+        return {
+            "lead_id": lead.get("lead_id"),
+            "name": name,
+            "score": score,
+            "service": service,
+            "evidence": evidence,
+            "pain_points": pain_points,
+            "message": message,
+            "mode": "outreach_only",
+            "auto_reply": False,
+        }
+
+
+if __name__ == "__main__":
+    generator = PersonalizedOfferGenerator()
+
+    demo_lead = {
+        "lead_id": "demo",
+        "name": "Demo Restaurant",
+        "score": 79,
+    }
+
+    demo_analysis = {
+        "score": 79,
+        "signals": [
+            "Active paid advertising detected.",
+            "Website has a visible conversion CTA.",
+            "Business WhatsApp contact detected.",
+        ],
+        "opportunities": [
+            "Campaign optimization opportunity.",
+            "Tracking setup should be reviewed.",
+        ],
+        "recommended_service": (
+            "Media Buying Audit + Campaign Optimization"
+        ),
+    }
+
+    result = generator.generate(
+        demo_lead,
+        demo_analysis
+    )
+
+    print(json.dumps(
+        result,
+        indent=2,
+        ensure_ascii=False
+    ))

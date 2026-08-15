@@ -1,0 +1,218 @@
+import os
+import json
+import sqlite3
+from datetime import datetime, timezone
+
+from flask import Blueprint, request, jsonify
+
+from integrations.sales.sales_agent import SalesAgent
+
+
+webhook = Blueprint(
+    "whatsapp_webhook",
+    __name__,
+    url_prefix="/webhook/whatsapp"
+)
+
+sales_agent = SalesAgent()
+
+
+@webhook.get("")
+def verify():
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    expected = os.getenv(
+        "WHATSAPP_VERIFY_TOKEN"
+    )
+
+    if (
+        mode == "subscribe"
+        and token
+        and expected
+        and token == expected
+    ):
+        return challenge or "", 200
+
+    return "Verification failed", 403
+
+
+@webhook.post("")
+def receive():
+    payload = request.get_json(
+        silent=True
+    ) or {}
+
+    try:
+        for entry in payload.get(
+            "entry",
+            []
+        ):
+            for change in entry.get(
+                "changes",
+                []
+            ):
+                value = change.get(
+                    "value",
+                    {}
+                )
+
+                messages = value.get(
+                    "messages",
+                    []
+                )
+
+                for message in messages:
+                    if message.get(
+                        "type"
+                    ) != "text":
+                        continue
+
+                    sender = message.get(
+                        "from"
+                    )
+
+                    text = (
+                        message
+                        .get("text", {})
+                        .get("body", "")
+                    )
+
+                    if not sender or not text:
+                        continue
+
+                    # Temporary lead mapping:
+                    # later this will resolve the real lead.
+                    lead_id = sender
+
+                    lead_id = sender
+
+                    root_dir = os.path.dirname(
+                        os.path.dirname(
+                            os.path.dirname(
+                                os.path.abspath(__file__)
+                            )
+                        )
+                    )
+
+                    db_path = os.path.join(
+                        root_dir,
+                        "data",
+                        "sales.db"
+                    )
+
+                    now = datetime.now(
+                        timezone.utc
+                    ).isoformat()
+
+                    with sqlite3.connect(db_path) as con:
+                        cur = con.cursor()
+
+                        cur.execute(
+                            "SELECT lead_id FROM leads WHERE lead_id = ?",
+                            (lead_id,)
+                        )
+
+                        exists = cur.fetchone()
+
+                        if exists is None:
+                            cur.execute(
+                                """
+                                INSERT INTO leads (
+                                    lead_id,
+                                    created_at,
+                                    updated_at,
+                                    name,
+                                    source,
+                                    status,
+                                    score,
+                                    priority,
+                                    paid,
+                                    revenue,
+                                    metadata_json
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    lead_id,
+                                    now,
+                                    now,
+                                    sender,
+                                    "whatsapp",
+                                    "new",
+                                    0,
+                                    "unknown",
+                                    0,
+                                    0,
+                                    json.dumps({
+                                        "phone": sender
+                                    })
+                                )
+                            )
+                        else:
+                            cur.execute(
+                                """
+                                UPDATE leads
+                                SET updated_at = ?
+                                WHERE lead_id = ?
+                                """,
+                                (now, lead_id)
+                            )
+
+                        cur.execute(
+                            """
+                            INSERT INTO events (
+                                lead_id,
+                                timestamp,
+                                event_type,
+                                channel,
+                                actor,
+                                content,
+                                metadata_json
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                lead_id,
+                                now,
+                                "message",
+                                "whatsapp",
+                                "customer",
+                                text,
+                                json.dumps({
+                                    "message_id": message.get("id"),
+                                    "phone": sender
+                                })
+                            )
+                        )
+
+                    sales_agent.record_chat(
+                        lead_id=lead_id,
+                        message=text,
+                        direction="inbound",
+                        channel="whatsapp",
+                        metadata={
+                            "message_id": message.get(
+                                "id"
+                            ),
+                            "timestamp": message.get(
+                                "timestamp"
+                            ),
+                            "phone": sender
+                        }
+                    )
+
+        return jsonify({
+            "status": "ok"
+        }), 200
+
+    except Exception as error:
+        print(
+            "[WHATSAPP WEBHOOK ERROR]",
+            repr(error)
+        )
+
+        return jsonify({
+            "status": "error"
+        }), 500
